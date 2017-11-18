@@ -21,7 +21,7 @@ buildc: .build-image
 build: stress
 
 stress: stress.cc
-	g++ stress.cc -o stress -static -Wall -Werror
+	g++ -g stress.cc -o stress -pthread -static -Wall -Werror
 
 .PHONY: clean
 clean:
