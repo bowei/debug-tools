@@ -1,15 +1,28 @@
+#include <chrono>
+#include <cstdlib>
 #include <iostream>
+#include <mutex>
+#include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <errno.h>
 #include <string.h>
 #include <netdb.h>
-#include <pthread.h>
+
+using ChronoMs = std::chrono::duration<double, std::milli>;
 
 struct ThreadArg {
   std::string name;
 };
+
+struct {
+  size_t thread_count;
+  std::string name;
+} global_args;
+
+std::mutex report_lock;
 
 const char* h_errno_to_str(int v) {
   switch (v) {
@@ -22,42 +35,63 @@ const char* h_errno_to_str(int v) {
 }
 
 bool parse_args(int argc, char* argv[]);
-void* run(void* arg);
+void run_thread();
 
 int main(int argc, char* argv[]) {
   if (! parse_args(argc, argv)) {
     return 1;
   }
 
-  pthread_t thr;
-  pthread_create(&thr, nullptr, run, nullptr);
-  pthread_join(thr, nullptr);
+  std::vector<std::shared_ptr<std::thread>> threads;
+  for (int i=0; i<5; ++i) {
+    auto th = std::make_shared<std::thread>(run_thread);
+    threads.push_back(th);
+  }
+  for (auto th : threads) {
+    th->join();
+  }
 }
 
 bool parse_args(int argc, char* argv[]) {
+  for (int i=1; i<argc; ++i) {
+    std::string arg(argv[i]);
+    if (arg == "-n") {
+      global_args.name = argv[i+1];
+      ++i;
+    } else if (arg == "-t") {
+      global_args.thread_count = atoi(argv[i+1]);
+      ++i;
+    } else {
+      std::cerr << "Invalid command line arg: " << arg << std::endl;
+      ::exit(1);
+    }
+  }
+
   return true;
 }
 
-void* run(void* arg) {
-  std::cout << "run()" << std::endl;
-  std::string name("no.such.domain.svc");
-  //std::string name("google.com");
-
+void run_thread() {
   std::vector<char> scratch(1 * 1024);
   struct hostent hret;
   struct hostent* result;
   int h_errno;
 
-  while (true) {
+  for (int i=0; i<100; ++i) {
+    auto start = std::chrono::high_resolution_clock::now();
+    std::string name = global_args.name;
+
+
     const int ret = gethostbyname_r(
         name.c_str(), &hret, &scratch[0], scratch.size(), &result, &h_errno);
-    if (ret != 0) {
-      std::cout
-          << "ret=" << ret << ": " << strerror(errno)
-          << ", " << h_errno << ": " << h_errno_to_str(h_errno)
-          << std::endl;
-    }
-  }
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> elapsed = end - start;
 
-  return nullptr;
+    std::ostringstream msg;
+    msg << "gethostbyname(" << name << ")=" << ret
+        << ", h_errno=" << h_errno << " (" << h_errno_to_str(h_errno) << ")"
+        << ", " << elapsed.count() << " ms";
+
+    std::lock_guard<std::mutex> guard(report_lock);
+    std::cout << msg.str() << std::endl;
+  }
 }
